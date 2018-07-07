@@ -37,14 +37,14 @@ func (mgr superviseFJ) init(tasks []Task) Supervisor {
 	mgr.tasks = bindTasks(tasks)
 	mgr.awaiting = make(map[*boundTask]struct{}, len(tasks))
 	mgr.results = make(map[*boundTask]error, len(tasks))
-	return mgr
+	return &mgr
 }
 
 func (mgr superviseFJ) Name() string {
 	return mgr.name
 }
 
-func (mgr superviseFJ) Run(parentCtx context.Context) error {
+func (mgr *superviseFJ) Run(parentCtx context.Context) error {
 	// Enforce single-run under mutex for sanity.
 	mgr.mu.Lock()
 	if mgr.phase != phase_init {
