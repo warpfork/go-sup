@@ -1,10 +1,19 @@
 package sup
 
+// Supervisor is a marker interface for supervisor implementations.
+//
+// It has no real functional purpose -- it's mostly to make godoc show
+// you the supervisor creation methods in one group :)
+type Supervisor interface {
+	NamedTask
+	_Supervisor()
+}
+
 func SuperviseForkJoin(
 	taskGroupName string,
 	tasks []Task,
 	opts ...SupervisionOptions,
-) NamedTask {
+) Supervisor {
 	return superviseFJ{name: taskGroupName}.init(tasks)
 }
 

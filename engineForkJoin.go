@@ -30,7 +30,9 @@ type superviseFJ struct {
 	results  map[*boundTask]error
 }
 
-func (mgr superviseFJ) init(tasks []Task) NamedTask {
+func (superviseFJ) _Supervisor() {}
+
+func (mgr superviseFJ) init(tasks []Task) Supervisor {
 	mgr.phase = phase_init
 	mgr.tasks = bindTasks(tasks)
 	mgr.awaiting = make(map[*boundTask]struct{}, len(tasks))
