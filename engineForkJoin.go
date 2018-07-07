@@ -2,6 +2,7 @@ package sup
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 )
 
@@ -115,6 +116,7 @@ func (mgr superviseFJ) childLaunch(groupCtx context.Context, report chan<- repor
 		report <- reportMsg{task, childErr}
 		// TODO panic recovery
 	}()
-	ctx := appendCtxInfo(groupCtx, ctxInfo{task})
+	taskPath := filepath.Join(CtxTaskPath(groupCtx), task.name)
+	ctx := appendCtxInfo(groupCtx, ctxInfo{task, taskPath})
 	childErr = task.original.Run(ctx)
 }
