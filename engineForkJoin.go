@@ -113,6 +113,6 @@ func (mgr superviseFJ) childLaunch(groupCtx context.Context, report chan<- repor
 		report <- reportMsg{task, childErr}
 		// TODO panic recovery
 	}()
-	ctx := groupCtx // TODO attach names and such
+	ctx := appendCtxInfo(groupCtx, ctxInfo{task})
 	childErr = task.original.Run(ctx)
 }
