@@ -42,9 +42,15 @@ func (t mapEntryTask) Run(ctx context.Context) error {
 	return t.fn(ctx, t.k, t.v)
 }
 
+// TaskGen is a channel which yields tasks until closed.
+// A TaskGen channel is used to feed work into a supervisor that runs
+// unbounded numbers of tasks (it's not useful for SupervisorForkJoin,
+// for example, because all the tasks are known up front in that scenario).
+type TaskGen <-chan Task
+
 func TaskGenFromChannel(
 	theChan interface{},
 	taskFn func(context.Context, interface{}) error,
-) <-chan Task {
+) TaskGen {
 	panic("not yet implemented")
 }
