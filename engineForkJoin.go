@@ -69,6 +69,7 @@ func (mgr *superviseFJ) Run(parentCtx context.Context) error {
 	//  This is the happy-path loop.
 	//  If anyone errors or we're cancelled, jump down.
 	var firstErr error
+watch:
 	for range mgr.tasks {
 		select {
 		case report := <-reportCh:
@@ -77,12 +78,12 @@ func (mgr *superviseFJ) Run(parentCtx context.Context) error {
 			if report.result != nil {
 				mgr.phase = phase_halting
 				firstErr = report.result
-				break
+				break watch
 			}
 		case <-parentCtx.Done():
 			mgr.phase = phase_halting
 			firstErr = parentCtx.Err()
-			break
+			break watch
 		}
 	}
 	// Did we collect all reports without getting unhappy?  Nice; return.
