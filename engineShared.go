@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 )
 
-type phase byte
+type phase uint32
 
 const (
 	phase_uninitalized = phase(0) // panic if you see this.

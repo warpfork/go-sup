@@ -2,14 +2,13 @@ package sup
 
 import (
 	"context"
-	"sync"
+	"sync/atomic"
 )
 
 type superviseStream struct {
 	name        string
 	taskGen     TaskGen
-	mu          sync.Mutex
-	phase       phase
+	phase       uint32
 	reportCh    <-chan reportMsg
 	groupCancel func()
 	awaiting    map[*boundTask]struct{}
@@ -20,7 +19,7 @@ type superviseStream struct {
 func (superviseStream) _Supervisor() {}
 
 func (mgr superviseStream) init(tg TaskGen) Supervisor {
-	mgr.phase = phase_init
+	mgr.phase = uint32(phase_init)
 	mgr.taskGen = tg
 	return &mgr
 }
@@ -31,12 +30,10 @@ func (mgr superviseStream) Name() string {
 
 func (mgr *superviseStream) Run(parentCtx context.Context) error {
 	// Enforce single-run under mutex for sanity.
-	mgr.mu.Lock()
-	if mgr.phase != phase_init {
+	ok := atomic.CompareAndSwapUint32(&mgr.phase, uint32(phase_init), uint32(phase_running))
+	if !ok {
 		panic("supervisor can only be Run() once!")
 	}
-	mgr.phase = phase_running
-	mgr.mu.Unlock()
 
 	mgr.awaiting = make(map[*boundTask]struct{})
 	mgr.results = make(map[*boundTask]error)
@@ -73,7 +70,6 @@ func (mgr *superviseStream) _running(parentCtx context.Context) phaseFn {
 				return mgr._halting
 			}
 		case <-parentCtx.Done():
-			mgr.phase = phase_halting
 			mgr.firstErr = parentCtx.Err()
 			return mgr._halting
 		}
@@ -81,7 +77,7 @@ func (mgr *superviseStream) _running(parentCtx context.Context) phaseFn {
 }
 
 func (mgr *superviseStream) _collecting(parentCtx context.Context) phaseFn {
-	mgr.phase = phase_collecting
+	atomic.StoreUint32(&mgr.phase, uint32(phase_collecting))
 
 	// We're not accepting new tasks anymore, so this loop is now only
 	//  for collecting results or accepting a group cancel instruction;
@@ -96,7 +92,6 @@ func (mgr *superviseStream) _collecting(parentCtx context.Context) phaseFn {
 				return mgr._halting
 			}
 		case <-parentCtx.Done():
-			mgr.phase = phase_halting
 			mgr.firstErr = parentCtx.Err()
 			return mgr._halting
 		}
@@ -105,7 +100,7 @@ func (mgr *superviseStream) _collecting(parentCtx context.Context) phaseFn {
 }
 
 func (mgr *superviseStream) _halting(_ context.Context) phaseFn {
-	mgr.phase = phase_halting
+	atomic.StoreUint32(&mgr.phase, uint32(phase_halting))
 
 	// We're halting, not entirely happily.  Cancel all children.
 	mgr.groupCancel()
@@ -122,6 +117,6 @@ func (mgr *superviseStream) _halting(_ context.Context) phaseFn {
 }
 
 func (mgr *superviseStream) _halt(_ context.Context) phaseFn {
-	mgr.phase = phase_halt
+	atomic.StoreUint32(&mgr.phase, uint32(phase_halt))
 	return nil
 }
