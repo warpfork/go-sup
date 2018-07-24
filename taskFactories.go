@@ -5,6 +5,18 @@ import (
 	"reflect"
 )
 
+func TaskFromFunc(fn func(ctx context.Context) error) []Task {
+	return []Task{fnTask{fn}}
+}
+
+type fnTask struct {
+	fn func(ctx context.Context) error
+}
+
+func (t fnTask) Run(ctx context.Context) error {
+	return t.fn(ctx)
+}
+
 func TasksFromSlice(
 	theSlice interface{},
 	taskFn func(context.Context, interface{}) error,
