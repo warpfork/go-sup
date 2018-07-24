@@ -33,7 +33,9 @@ func SuperviseForkJoin(
 	tasks []Task,
 	opts ...SupervisionOptions,
 ) Supervisor {
-	return superviseFJ{name: taskGroupName}.init(tasks)
+	//return superviseFJ{name: taskGroupName}.init(tasks)
+	return superviseStream{name: taskGroupName}.init(TaskGenFromTasks(tasks))
+
 }
 
 // Placeholder.

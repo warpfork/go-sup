@@ -54,3 +54,12 @@ func TaskGenFromChannel(
 ) TaskGen {
 	panic("not yet implemented")
 }
+
+func TaskGenFromTasks(tasks []Task) TaskGen {
+	ch := make(chan Task, len(tasks))
+	for _, t := range tasks {
+		ch <- t
+	}
+	close(ch)
+	return ch
+}
