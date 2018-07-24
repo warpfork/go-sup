@@ -12,7 +12,7 @@ type superviseStream struct {
 	reportCh    <-chan reportMsg
 	groupCancel func()
 	awaiting    map[*boundTask]struct{}
-	results     map[*boundTask]error
+	results     map[*boundTask]*ErrChild
 	firstErr    error
 }
 
@@ -39,7 +39,7 @@ func (mgr *superviseStream) Run(parentCtx context.Context) error {
 
 	// Allocate statekeepers.
 	mgr.awaiting = make(map[*boundTask]struct{})
-	mgr.results = make(map[*boundTask]error)
+	mgr.results = make(map[*boundTask]*ErrChild)
 
 	// Step through phases (the halting phase will return a nil next phase).
 	for phase := mgr._running; phase != nil; {

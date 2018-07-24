@@ -2,6 +2,7 @@ package sup
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 )
 
@@ -20,18 +21,48 @@ type phaseFn func(parentCtx context.Context) phaseFn
 
 type reportMsg struct {
 	task   *boundTask
-	result error
+	result *ErrChild
+}
+
+// ErrChild wraps any errors returned or panicked from a Task when they're
+// yielded up a supervision tree.
+//
+// The original error can be extracted from the `Err` field.
+//
+// Some additional metadata is available from the other fields.
+type ErrChild struct {
+	Err      error
+	WasPanic bool
+}
+
+func (e ErrChild) Error() string {
+	return e.Err.Error()
 }
 
 // childLaunch is the first function on a child goroutine's stack.
 // It handles context tree extension, defer capturing, etc.
 func childLaunch(groupCtx context.Context, report chan<- reportMsg, task *boundTask) {
-	var childErr error
+	var childErr error // The child's *returned* error is stored here.
 	defer func() {
-		report <- reportMsg{task, childErr}
-		// TODO panic recovery
+		report <- reportMsg{task, siftError(childErr, recover())}
 	}()
 	taskPath := filepath.Join(CtxTaskPath(groupCtx), task.name)
 	ctx := appendCtxInfo(groupCtx, ctxInfo{task, taskPath})
 	childErr = task.original.Run(ctx)
+}
+
+func siftError(retErr error, rcvr interface{}) *ErrChild {
+	if rcvr != nil {
+		if err, ok := rcvr.(error); ok {
+			return &ErrChild{err, true}
+		}
+		return &ErrChild{fmt.Errorf("%v", rcvr), true}
+	}
+	if retErr == nil {
+		return nil
+	}
+	if e2, ok := retErr.(*ErrChild); ok {
+		return e2
+	}
+	return &ErrChild{retErr, false}
 }

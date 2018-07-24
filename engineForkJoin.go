@@ -12,7 +12,7 @@ type superviseFJ struct {
 	reportCh    <-chan reportMsg
 	groupCancel func()
 	awaiting    map[*boundTask]struct{}
-	results     map[*boundTask]error
+	results     map[*boundTask]*ErrChild
 	firstErr    error
 }
 
@@ -39,7 +39,7 @@ func (mgr *superviseFJ) Run(parentCtx context.Context) error {
 
 	// Allocate statekeepers.
 	mgr.awaiting = make(map[*boundTask]struct{}, len(mgr.tasks))
-	mgr.results = make(map[*boundTask]error, len(mgr.tasks))
+	mgr.results = make(map[*boundTask]*ErrChild, len(mgr.tasks))
 
 	// Step through phases (the halting phase will return a nil next phase).
 	for phase := mgr._running; phase != nil; {
