@@ -16,6 +16,8 @@ const (
 	phase_halt         = phase(5) // all tasks have returned, we're done here and you can have the final result.
 )
 
+type phaseFn func(parentCtx context.Context) phaseFn
+
 type reportMsg struct {
 	task   *boundTask
 	result error

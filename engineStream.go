@@ -35,6 +35,7 @@ func (mgr *superviseStream) Run(parentCtx context.Context) error {
 		panic("supervisor can only be Run() once!")
 	}
 
+	// Allocate statekeepers.
 	mgr.awaiting = make(map[*boundTask]struct{})
 	mgr.results = make(map[*boundTask]error)
 
@@ -46,13 +47,17 @@ func (mgr *superviseStream) Run(parentCtx context.Context) error {
 	return mgr.firstErr
 }
 
-type phaseFn func(parentCtx context.Context) phaseFn
-
 func (mgr *superviseStream) _running(parentCtx context.Context) phaseFn {
+	// Build the child status channel we'll be watching,
+	// and the groupCtx which will let us cancel all children in bulk.
 	reportCh := make(chan reportMsg)
 	mgr.reportCh = reportCh
 	groupCtx, groupCancel := context.WithCancel(parentCtx)
 	mgr.groupCancel = groupCancel
+
+	// Loop selecting over new task submissions, result collection, or
+	//  accepting a group cancel instruction.  We'll only break out on
+	//  errors, cancels, or if the taskgen channel is closed.
 	for {
 		select {
 		case newTask, ok := <-mgr.taskGen:
