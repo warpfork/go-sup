@@ -5,12 +5,24 @@ import (
 )
 
 // Supervisor is a marker interface for supervisor implementations.
+// All Supervisors are themselves a perfectly normal Task, plus some additional
+// methods which allow monitoring their status.
 //
-// It has no real functional purpose -- it's mostly to make godoc show
-// you the supervisor creation methods in one group :)
+// Since a Supervisor is a Task, any supervisor may be submitted to another
+// supervisor!  Composing trees of supervision like this is a great way to
+// architect reliable programs.
+//
+// Like most other Task implementations, most of the work a supervisor should
+// be doing is bound at construction time.  For supervisors, usually means
+// either a slice []Task or TaskGen channel is a parameter when creating the
+// supervisor.
+//
+// Supervisors can be cancelled just like any other Task -- through Context.
+// Cancellation of one supervisor will automatically fan out to all children
+// (including, of course, recursively through other supervisors).
 type Supervisor interface {
-	NamedTask
-	_Supervisor()
+	NamedTask     // All supervisors are themselves tasks that can be submitted to another supervisor.
+	Phase() Phase // Return the current phase the supervisor is in (advisory/monitoring only).
 }
 
 // SuperviseRoot takes a supervisor and runs it in the current goroutine.

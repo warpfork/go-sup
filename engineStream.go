@@ -16,10 +16,12 @@ type superviseStream struct {
 	firstErr    error
 }
 
-func (superviseStream) _Supervisor() {}
+func (mgr superviseStream) Phase() Phase {
+	return Phase(atomic.LoadUint32(&mgr.phase))
+}
 
 func (mgr superviseStream) init(tg TaskGen) Supervisor {
-	mgr.phase = uint32(phase_init)
+	mgr.phase = uint32(Phase_init)
 	mgr.taskGen = tg
 	return &mgr
 }
@@ -30,7 +32,7 @@ func (mgr superviseStream) Name() string {
 
 func (mgr *superviseStream) Run(parentCtx context.Context) error {
 	// Enforce single-run under mutex for sanity.
-	ok := atomic.CompareAndSwapUint32(&mgr.phase, uint32(phase_init), uint32(phase_running))
+	ok := atomic.CompareAndSwapUint32(&mgr.phase, uint32(Phase_init), uint32(Phase_running))
 	if !ok {
 		panic("supervisor can only be Run() once!")
 	}
@@ -82,7 +84,7 @@ func (mgr *superviseStream) _running(parentCtx context.Context) phaseFn {
 }
 
 func (mgr *superviseStream) _collecting(parentCtx context.Context) phaseFn {
-	atomic.StoreUint32(&mgr.phase, uint32(phase_collecting))
+	atomic.StoreUint32(&mgr.phase, uint32(Phase_collecting))
 
 	// We're not accepting new tasks anymore, so this loop is now only
 	//  for collecting results or accepting a group cancel instruction;
@@ -105,7 +107,7 @@ func (mgr *superviseStream) _collecting(parentCtx context.Context) phaseFn {
 }
 
 func (mgr *superviseStream) _halting(_ context.Context) phaseFn {
-	atomic.StoreUint32(&mgr.phase, uint32(phase_halting))
+	atomic.StoreUint32(&mgr.phase, uint32(Phase_halting))
 
 	// We're halting, not entirely happily.  Cancel all children.
 	mgr.groupCancel()
@@ -122,6 +124,6 @@ func (mgr *superviseStream) _halting(_ context.Context) phaseFn {
 }
 
 func (mgr *superviseStream) _halt(_ context.Context) phaseFn {
-	atomic.StoreUint32(&mgr.phase, uint32(phase_halt))
+	atomic.StoreUint32(&mgr.phase, uint32(Phase_halt))
 	return nil
 }

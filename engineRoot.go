@@ -12,7 +12,9 @@ type superviseRoot struct {
 	task *boundTask
 }
 
-func (superviseRoot) _Supervisor() {}
+func (superviseRoot) Phase() Phase {
+	return Phase_collecting
+}
 
 func (mgr superviseRoot) init(task Supervisor) Supervisor {
 	mgr.task = bindTask(task)
