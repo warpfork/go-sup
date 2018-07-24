@@ -30,7 +30,7 @@ func (mgr superviseFJ) Name() string {
 
 func (mgr *superviseFJ) Run(parentCtx context.Context) error {
 	// Enforce single-run under mutex for sanity.
-	ok := atomic.CompareAndSwapUint32(&mgr.phase, uint32(phase_init), uint32(phase_running))
+	ok := atomic.CompareAndSwapUint32(&mgr.phase, uint32(phase_init), uint32(phase_collecting))
 	if !ok {
 		panic("supervisor can only be Run() once!")
 	}
