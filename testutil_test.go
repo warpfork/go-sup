@@ -2,8 +2,23 @@ package sup_test
 
 import (
 	"bytes"
+	"testing"
 	"text/template"
 )
+
+func mustEqual(t *testing.T, actual, expect interface{}) {
+	t.Helper()
+	if actual != expect {
+		t.Fatalf("%+v != %+v", actual, expect)
+	}
+}
+
+func shouldEqual(t *testing.T, actual, expect interface{}) {
+	t.Helper()
+	if actual != expect {
+		t.Errorf("%+v != %+v", actual, expect)
+	}
+}
 
 func tmplToStr(tmpl string, obj interface{}) string {
 	var buf bytes.Buffer
