@@ -1,8 +1,10 @@
 package sup
 
 import (
-	. "context"
+	"context"
 )
+
+type Context = context.Context
 
 type ctxKey struct{}
 
@@ -12,7 +14,7 @@ type ctxInfo struct {
 }
 
 func appendCtxInfo(ctx Context, x ctxInfo) Context {
-	return WithValue(ctx, ctxKey{}, x)
+	return context.WithValue(ctx, ctxKey{}, x)
 }
 
 // CtxTaskName returns the name of the current task
