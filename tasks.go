@@ -20,8 +20,10 @@ type Task interface {
 // attach to the context when launching the task and use in any go-sup logging.
 //
 // If this interface is not implemented by a Task, the default behavior is to
-// generate a name based on an interal memory address of the Task (based on the
-// assumption that this should be reasonably uniqueish in practice).
+// generate a name when the Task is submitted.
+// (The generated name will be based on the memory address of some
+// heap-allocated internal bookkeeping structures, based on the assumption
+// that this should be reasonably uniqueish in practice.)
 type NamedTask interface {
 	Task
 	Name() string
