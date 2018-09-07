@@ -45,9 +45,19 @@ func SuperviseForkJoin(
 	tasks []Task,
 	opts ...SupervisionOptions,
 ) Supervisor {
-	//return superviseFJ{name: taskGroupName}.init(tasks)
-	return superviseStream{name: taskGroupName}.init(TaskGenFromTasks(tasks))
+	return superviseFJ{name: taskGroupName}.init(tasks)
+}
 
+// SuperviseStream creates a Supervisor which will launch and handle
+// a goroutine for each of the tasks supplied by the given TaskGen channel.
+// When run, the supervisor will not return until the TaskGen channel is closed
+// or the Run context is cancelled.
+func SuperviseStream(
+	taskGroupName string,
+	taskSrc TaskGen,
+	opts ...SupervisionOptions,
+) Supervisor {
+	return superviseStream{name: taskGroupName}.init(taskSrc)
 }
 
 // Placeholder.
