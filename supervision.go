@@ -85,6 +85,12 @@ type SupervisedTask interface {
 	// However, it can be called at any later time if you wish to perform some interesting scheduling control.
 	Run() error
 
+	// State peeks at the current state of the task.
+	// This is an atomically loaded view, but may instantly be out of date, and so is really only useful for inspection and monitoring purposes.
+	//
+	// Use Promise if you want to wait for the state to become TaskState_Done.
+	State() TaskState
+
 	// Task returns a pointer to the raw Task that this SupervisedTask wraps.
 	//
 	// Note that undefined behavior will result if calling Task.Run directly;
@@ -94,8 +100,21 @@ type SupervisedTask interface {
 	// Parent returns the Supervisor that this task was submitted to.
 	Parent() Supervisor
 
-	// TODO embed Promise here as well, so it's possible to wait for completion on a SupervisedTask in a standardized way.
+	// Promise can be used to await the completion of a SupervisedTask.
+	// The returned Promise value will be resolved when this task becomes done.
+	Promise() Promise[SupervisedTask]
 }
+
+type TaskState uint8
+
+const (
+	TaskState_Initial                TaskState = iota // unpowered and unsupervised
+	TaskState_SupervisedButUnpowered                  // We've been enrolled in a supervisor, but no thread provided.
+	TaskState_BlockedUntilSupervised                  // `Do` has been called, so we have a thread ready to go to work, but we've parked that thread until we get a supervisor.
+	TaskState_Running                                 // `Do` has been called; we are supervised; work is in progress; it hasn't halted or been cancelled yet.
+	TaskState_Cancelling                              // The task state was previously Running, but we've now been cancelled, and we're waiting on the task to wrap up before transitioning to Done.
+	TaskState_Done                                    // Running is done.
+)
 
 type SupervisionReaction uint8
 
