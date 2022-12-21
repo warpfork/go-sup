@@ -12,19 +12,33 @@ func TestPromise(t *testing.T) {
 	interactions := []func(){
 		func() {
 			p.Await(context.Background())
+			if p.Value() != 9 {
+				panic("wrong value")
+			}
 			wg.Done()
 		},
 		func() {
 			<-p.ResolvedCh()
+			if p.Value() != 9 {
+				panic("wrong value")
+			}
 			wg.Done()
 		},
 		func() {
-			p.WhenResolved(wg.Done)
+			p.WhenResolved(func() {
+				if p.Value() != 9 {
+					panic("wrong value")
+				}
+				wg.Done()
+			})
 		},
 		func() {
 			ch := make(chan Promise[int])
 			p.ReportTo(ch)
 			<-ch
+			if p.Value() != 9 {
+				panic("wrong value")
+			}
 			wg.Done()
 		},
 		func() {
