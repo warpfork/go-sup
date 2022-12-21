@@ -110,14 +110,18 @@ func (p *promise[V]) resolve(value V) {
 	//      but that doesn't need to translate to prolonged lifetime for anything that was only referenced for notification purposes.)
 	close(p.ch)
 	p.mu.Lock()
-	p.cb1()
-	p.cb1 = nil
+	if p.cb1 != nil {
+		p.cb1()
+		p.cb1 = nil
+	}
 	for _, cb := range p.cbList {
 		cb()
 	}
 	p.cbList = nil
-	p.rep1 <- p
-	p.rep1 = nil
+	if p.rep1 != nil {
+		p.rep1 <- p
+		p.rep1 = nil
+	}
 	for _, rep := range p.repList {
 		rep <- p
 	}
