@@ -126,8 +126,11 @@ func (p *promise[V]) resolve(value V) {
 		rep <- p
 	}
 	p.repList = nil
-	// And we'll just... quietly never unlock that mutex again.
-	// It's a library bug if it's ever consulted again; so as a form of defense in depth, let's make sure it's noticable if something does.
+	// We still have to unlock the mutex that controls access to the notifier fields.
+	//  We don't expect any of those fields to ever be set again!  But...
+	//  As long as the mutex is held, it would block any registrations that are trying to enter the lock zone after seeing a rapidly-becoming-stale not-done state.
+	//   Those registration calls are going to see the done state as soon as they re-check it under the lock, but if they got a race in the optimistic check, they have to acquire the lock to get there.
+	p.mu.Unlock()
 }
 
 func (p *promise[V]) Value() V {
