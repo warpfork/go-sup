@@ -56,6 +56,11 @@ type selectableSend struct {
 // Because the rest of the supervision library components don't need to depend on this directly in any way,
 // whether or not this works at extreme performance isn't a blocker for determining whether this project as a whole is worth-while.
 
+// Another option might be binding a "set me" value, and switch cases to check all such values after the select (though this would rely on nil as informative), and is a linear search.
+// Another option might be documenting a pattern of methods on a struct for the various reactions, and how to compose that.
+//  Recommendations of syntactically obtrusive patterns isn't a joy, but on the other hand, at least for actor-shaped stuff, this isn't a bad convention anyway.
+//  (It's terrible if you wanted nesting, though.)
+
 type ReceiverChannel[T any] struct {
 	Chan <-chan T
 }

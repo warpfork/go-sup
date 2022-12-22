@@ -50,6 +50,17 @@ func (t simpleTask) Run(ctx Context) error { return t.fn(ctx) }
 // REVIEW: this is pretty indirection-heavy and also TaskOfSteppedTask forces syntax burden on the end-user.
 // Maybe this should be accomplished by offering a helper function that one uses inside one's Run func, instead.
 // We don't gain much that's special by implementing this control loop out here in a known place.
+//
+// We could have the body be recommended to be something like:
+//   `func (t *myTask) Run(Context) error { return sup.RunSteps(t.RunStep) }`.
+//  That does basically the right things and is very non-magical,
+//  and while it shifts *some* syntax burden onto the user, it's in the definition area, not in the registration area, which seems better.
+//  Grabbing a reference to another method of the same value like that also does not provoke enclosure allocations, so is roughly free in performance terms.
+//
+// Or on the gripping hand: we could have more methods as markers, like `func (myTask) SteppedTask()` which have no purpose except to change how it's handled.
+//  I'm not sure this is maximally golang-idiomatic.  And it has the unfortunate effect that it can purpose relatively spooky-action-at-a-distance, while the main run method name is always the same, which is a bit confusing if you're not expecting it.
+//   Yeah, let's not do this.  I'd hate this when reading code review.
+
 type steppedTask struct {
 	t SteppedTask
 }

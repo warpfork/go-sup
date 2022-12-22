@@ -96,6 +96,36 @@ and automatically abort in response Context cancellation signals -- something yo
 These types something you can optionally use to supplement uses of `chan` and features like `sync.WaitGroup`,
 but don't have to replace or compete with those if you're comfortable using them.
 
+### Surprising bits
+
+(Well, maybe, depending on your point of view.
+But things that would've surprised _me_, even as the author,
+until I actually tried to write the dang things.)
+
+Surprising bit 1:
+go-sup still tries to leave the `go` keyword in your hands, at all times.
+Or at least as much as possible.
+
+Why?  Because some kinds of debug and error reports you get out of golang
+include a stack trace of the current goroutine... and the line information
+of _where that goroutine was launched_.  And nothing further.
+That means having the line that contains the `go` keyword be in some code
+that has semantic meaning is very important to debuggability.
+So: we try *not* to have that line be anywhere in the go-sup library code.
+
+Surprising bit 2:
+Creating a Supervisor requires a Context twice: once when constructing it,
+and again (and the same one! >.<) when launching it.
+As a nicety, we allow nil for the second one, but the argument is still there.
+
+This is a consequence of two design requirements colliding:
+the first is the fact we allow task submission to a Supervisor
+even before it's been launched (and this simplifies syntax and usage *drastically*),
+and need to know some things about the parentage for that to work
+(mostly for sheer logging purposes);
+the second is that a Supervisor implements Task itself in order to be sensibly
+composable, and this requires seeing a Context parameter again in its Run method.
+
 
 
 Recommended Usage Conventions
