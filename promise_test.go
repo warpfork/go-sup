@@ -10,6 +10,14 @@ func TestPromise(t *testing.T) {
 	p, resolve := NewPromise[int]()
 	var wg sync.WaitGroup
 	interactions := []func(){
+		// If uncommented: yes, this would (correctly) trigger the race detector.
+		// func() {
+		// 	time.Sleep(100 * time.Millisecond)
+		// 	if p.Value() != 9 {
+		// 		panic("wrong value")
+		// 	}
+		// 	wg.Done()
+		// },
 		func() {
 			p.Await(context.Background())
 			if p.Value() != 9 {
