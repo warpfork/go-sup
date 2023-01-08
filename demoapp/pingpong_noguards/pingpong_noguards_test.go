@@ -4,10 +4,32 @@ package pingpong
 // You could also implement a similar thing using sup's wrapped channels that come with guardrails.
 
 import (
+	"context"
 	"fmt"
+	"testing"
 
 	"github.com/warpfork/go-sup"
 )
+
+func TestPingpong(t *testing.T) {
+	pinger := &Actor{
+		config: Config{},
+	}
+	ponger := &Actor{
+		config: Config{
+			Ponger: true,
+		},
+	}
+
+	rootCtx := context.Background()
+	svr := sup.NewSupervisor(rootCtx)
+	go svr.Submit("pinger", sup.TaskOfSteppedTask(pinger)).Run()
+	go svr.Submit("ponger", sup.TaskOfSteppedTask(ponger)).Run()
+	err := svr.Run(rootCtx)
+	if err != nil {
+		panic(err)
+	}
+}
 
 type Actor struct {
 	wiring Wiring

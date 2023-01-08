@@ -122,8 +122,6 @@ type SupervisedTask interface {
 	// of its parents as well), as well as the name suggested when the Task was
 	// submitted (though this may have been modified by the Supervisor's task
 	// name selection strategy).
-	//
-	// FIXME big whoops.  can't do the FQ part until the supervisor got ran.  what do?  move Context param to supervisor constructor after all?  but can't remove it from Run so uh??  i guess we just document that the first one is for logging and the second one is for running and we panic if they aren't the same one.
 	Name() string
 
 	// Run launches the task, and blocks until the task is complete.
@@ -136,11 +134,12 @@ type SupervisedTask interface {
 	// However, it can be called at any later time if you wish to perform some interesting scheduling control.
 	Run() error
 
-	// State peeks at the current state of the task.
-	// This is an atomically loaded view, but may instantly be out of date, and so is really only useful for inspection and monitoring purposes.
+	// Phase peeks at the current phase of the task.
+	// This is an atomically loaded view, but may instantly be out of date,
+	// and so is really only useful for inspection and monitoring purposes.
 	//
-	// Use Promise if you want to wait for the state to become TaskState_Done.
-	State() TaskState
+	// Use Promise if you want to wait for the task's phase to become TaskPhase_Done.
+	Phase() TaskPhase
 
 	// Task returns a pointer to the raw Task that this SupervisedTask wraps.
 	//
@@ -156,15 +155,18 @@ type SupervisedTask interface {
 	Promise() Promise[SupervisedTask]
 }
 
-type TaskState uint8
+type TaskPhase = uint32
+
+// Implementation note: it may look somewhat odd that `TaskPhase` is an alias rather than a normal type declaration,
+// and it is, but ... see similar note on SupervisorPhase.
 
 const (
-	TaskState_Initial                TaskState = iota // Unpowered itself and its supervisor is also unpowered.  Both must change before work will happen.
-	TaskState_SupervisedButUnpowered                  // The task's Supervisor is running, but Run on this SupervisedTask has not be called.
-	TaskState_BlockedUntilSupervised                  // Run on this SupervisedTask has been called, but the Supervisor hasn't been Run yet, so we have a thread ready to go to work, but we've parked it until the Supervisor comes up.
-	TaskState_Running                                 // `Do` has been called; we are supervised; work is in progress; it hasn't halted or been cancelled yet.
-	TaskState_Cancelling                              // The task state was previously Running, but we've now been cancelled, and we're waiting on the task to wrap up before transitioning to Done.
-	TaskState_Done                                    // Running is done.
+	TaskPhase_Initial                TaskPhase = iota // Unpowered itself and its supervisor is also unpowered.  Both must change before work will happen.
+	TaskPhase_SupervisedButUnpowered                  // The task's Supervisor is running, but Run on this SupervisedTask has not be called.
+	TaskPhase_BlockedUntilSupervised                  // Run on this SupervisedTask has been called, but the Supervisor hasn't been Run yet, so we have a thread ready to go to work, but we've parked it until the Supervisor comes up.
+	TaskPhase_Running                                 // `Do` has been called; we are supervised; work is in progress; it hasn't halted or been cancelled yet.
+	TaskPhase_Cancelling                              // The task state was previously Running, but we've now been cancelled, and we're waiting on the task to wrap up before transitioning to Done.
+	TaskPhase_Done                                    // Running is done.
 )
 
 type SupervisionReaction uint8
@@ -188,8 +190,10 @@ func NewSupervisor(ctx Context) Supervisor {
 		returnOnEmpty:         true,
 
 		phase:         SupervisorPhase_NotStarted,
-		knownTasks:    make(map[string]SupervisedTask),
+		knownTasks:    make(map[string]*supervisedTask),
 		reservedNames: make(map[string]struct{}),
+
+		childCompletion: make(chan *supervisedTask, 1),
 	}
 }
 
@@ -207,8 +211,11 @@ type supervisor struct {
 
 	// state:
 	phase         SupervisorPhase
-	knownTasks    map[string]SupervisedTask
+	knownTasks    map[string]*supervisedTask
 	reservedNames map[string]struct{}
+
+	// wiring:
+	childCompletion chan *supervisedTask // children send themselves here when done.
 }
 
 type SupervisorPhase = uint32
@@ -244,11 +251,13 @@ func (s *supervisor) Run(Context) error {
 	if !ok {
 		panic("supervisor can only be Run() once!")
 	}
+
+	// Finish setting up and unblock all SupervisedTask that were registered before we launched.
 	panic("todo")
 }
 
 func (s *supervisor) Parent() Supervisor {
-	panic("todo")
+	return s.parent
 }
 
 func (s *supervisor) QuitAggressively() {
@@ -277,7 +286,55 @@ func (s *supervisor) SetWarningHandler(func(SupervisionWarning) error) {
 }
 
 type supervisedTask struct {
-	task   Task
-	parent Supervisor
-	state  TaskState
+	task         Task
+	parent       supervisor // set by parent when during Submit
+	ctx          Context    // set by parent when during Submit
+	phase        TaskPhase
+	clearToStart <-chan struct{} // closed to signal that the parent supervisor has started and is therefore ready to receive any errors.
+	err          error           // stored at end of Run; parent can pluck it back out.
+}
+
+func (t *supervisedTask) Run() error {
+	// Each phase is factored out so they show up obviously on any stack traces.
+	// Note that these don't correspond exactly to the TaskPhase codes that are exported.
+	// The await supervision phase can cover several codes.
+	// TaskPhase_Cancelling is somewhat ellusive; go-sup helpers (like the channel guards) can set it, but if it's the user's code that picks it up, well.
+	// And we give notification a phase here again just for labelling purposes.  It "should" be instant.  But... just in case: let's have it be visible in the stack trace.
+	t._phase_awaitSupervision()
+	t._phase_run()
+	t._phase_notify()
+	return t.err
+}
+
+func (t *supervisedTask) _phase_awaitSupervision() {
+	updated := false
+	for !updated { // Improbable that this loops at all, and certainly not more than once, but this may be racing a transition from Initial to SupervisedButUnpowered state in another goroutine.
+		prev := atomic.LoadUint32(&t.phase)
+		switch prev {
+		case TaskPhase_Initial, TaskPhase_SupervisedButUnpowered:
+			select {
+			case <-t.clearToStart:
+				updated = atomic.CompareAndSwapUint32(&t.phase, prev, TaskPhase_Running)
+				if updated {
+					return
+				}
+			default:
+				updated = atomic.CompareAndSwapUint32(&t.phase, prev, TaskPhase_BlockedUntilSupervised)
+			}
+		default:
+			panic("supervisedTask cannot be Run more than once!")
+		}
+	}
+	<-t.clearToStart
+	atomic.StoreUint32(&t.phase, TaskPhase_Running)
+}
+
+func (t *supervisedTask) _phase_run() {
+	t.err = t.task.Run(t.ctx)
+}
+
+func (t *supervisedTask) _phase_notify() {
+	t.parent.childCompletion <- t
+	atomic.StoreUint32(&t.phase, TaskPhase_Done)
+	// TODO there should be a 'Promise.resolve' right about here, too.
 }

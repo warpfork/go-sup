@@ -12,13 +12,21 @@ type (
 // ContextSupervisor returns a pointer to the Supervisor
 // that's the nearest parent in this context's tree.
 func ContextSupervisor(ctx Context) Supervisor {
-	return ctx.Value(ctxKey_supervisor{}).(Supervisor)
+	v := ctx.Value(ctxKey_supervisor{})
+	if v == nil {
+		return nil
+	}
+	return v.(Supervisor)
 }
 
 // ContextTask returns a pointer to the SupervisedTask
 // that's the nearest parent in this context's tree.
 func ContextTask(ctx Context) SupervisedTask {
-	return ctx.Value(ctxKey_task{}).(SupervisedTask)
+	v := ctx.Value(ctxKey_task{})
+	if v == nil {
+		return nil
+	}
+	return v.(SupervisedTask)
 }
 
 // ContextName is a shortcut for `ContextTask(ctx).Name()`,

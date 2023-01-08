@@ -21,10 +21,11 @@ func TestPingpong(t *testing.T) {
 		},
 	}
 
-	svr := sup.NewSupervisor()
-	go svr.Submit(sup.TaskOfSteppedTask(pinger)).Run()
-	go svr.Submit(sup.TaskOfSteppedTask(ponger)).Run()
-	err := svr.Run(context.Background())
+	rootCtx := context.Background()
+	svr := sup.NewSupervisor(rootCtx)
+	go svr.Submit("pinger", sup.TaskOfSteppedTask(pinger)).Run()
+	go svr.Submit("ponger", sup.TaskOfSteppedTask(ponger)).Run()
+	err := svr.Run(rootCtx)
 	if err != nil {
 		panic(err)
 	}
