@@ -5,6 +5,34 @@ Recommendations for structuring concurrent code with go-sup
 
 
 
+Pitfalls!
+---------
+
+We've tried to design the API of go-sup to have minimal opportunities to do something wrong,
+or to communicate clearly when something isn't assembled correctly,
+but we couldn't handle every possible situation.
+
+#### Be careful to 'go' on the right things.
+
+Make sure that when launching a task, the `go` keyword is applying
+on the `Run()` function.
+
+Good:
+
+```go
+go thesupervisor.Submit("taskname", task).Run()
+```
+
+Not good:
+
+```go
+go thesupervisor.Submit("taskname", task)
+```
+
+Unfortunately, there's no way the library can call out the latter situation.
+
+
+
 Actor Conventions
 -----------------
 

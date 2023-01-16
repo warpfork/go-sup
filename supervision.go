@@ -2,6 +2,7 @@ package sup
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 )
@@ -239,19 +240,19 @@ type SupervisorPhase = uint32
 // It would be nice if perhaps `atomic.CompareAndSwapUint32` used a constraint like `~uint32`, now that golang supports that.
 
 const (
-	_ SupervisorPhase = iota
-	SupervisorPhase_NotStarted
-	SupervisorPhase_Running
-	SupervisorPhase_WindingDown
-	SupervisorPhase_Aborting
-	SupervisorPhase_Halted
+	_                           SupervisorPhase = iota
+	SupervisorPhase_NotStarted                  // The supervisor hasn't started yet.  Task submission is acceptable.
+	SupervisorPhase_Running                     // The supervisor is running, watching existing tasks, and accepting new submissions.
+	SupervisorPhase_WindingDown                 // This supervisor is waiting for existing tasks, but not accepting new submissions.
+	SupervisorPhase_Aborted                     // The supervisor did a hard abort; children have been cancelled and their results not collected.  New submissions are not acceptable.
+	SupervisorPhase_Halted                      // The supervisor completed a graceful winding down: all child tasks were gathered.  New submissions are acceptable.  Children may have errored.
 )
 
 func (s *supervisor) Submit(name string, t Task) SupervisedTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// TODO if we're already WindingDown, Aborting, or Halted: return a dummy task.
+	// TODO if we're already WindingDown, Aborted, or Halted: return a dummy task.
 	//  ...probably do still have to name it?  Or can we give it a single reused dummy name?  Tbd.
 	// Perhaps also have configurable rejection strategy.  Some might prefer a panic if they submit to a closed supervisor.
 
@@ -268,7 +269,7 @@ func (s *supervisor) Submit(name string, t Task) SupervisedTask {
 		clearToStart: make(chan struct{}), // TODO I think we can avoid this alloc in the case the supervisor is already running.
 	}
 	st.promise, st.resolveFn = NewPromise[SupervisedTask]()
-	s.knownTasks[name] = st
+	s.knownTasks[name] = st // TODO don't do this if the supervisor is rejecting; it just adds more mutex needs and garbage collection problems.
 
 	// Create the Context for this soon-to-be child.
 	// Each supervised task gets a new context value, with attachments describing it,
@@ -313,36 +314,50 @@ func (s *supervisor) _submit_selectName(requested string) string {
 	}
 }
 
-func (s *supervisor) Run(Context) error {
-	if more := s._run_start(); !more {
-		return nil
-	}
+func (s *supervisor) Run(Context) (err error) {
+	phase := s._run_start()
 
 	// Loop, servicing the childCompletion channel, until either:
 	//  - knownTasks is empty, and returnOnEmpty is true at the same time;
 	//  - one of those child completions carries an error that the error reactor didn't swallow;
 	//  - or quitAggressively is called.
-	select {
-	// TODO case for quitAggressively
-	// TODO case for transitioned to returnOnEmpty==true
-	case child := <-s.childCompletion:
-		s._run_recvChild(child)
+	for phase == SupervisorPhase_Running {
+		select {
+		// TODO case for quitAggressively
+		// TODO case for transitioned to returnOnEmpty==true
+		case child := <-s.childCompletion:
+			phase, err = s._run_recvChild(child)
+		}
 	}
 
-	// TODO This is not easier to model as linear flow.  Use a state machine.
+	// Fan out cancellations.
+	//  (This may be functionally a no-op if we're shutting down gracefully from a lack of tasks,
+	//   but the context system obscures that from us to a high degree.)
+	s.cancelChildren()
 
-	// Fan out any cancellations.  (This is a no-op if we're shutting down gracefully from a lack of tasks.)
-	panic("todo")
-
-	// If we're in quitAggressively/abort mode: that's it.  Get outta here.
-	panic("todo")
+	// If we're in quitAggressively/abort mode: that's it.  Get outta here, without waiting.
+	if phase == SupervisorPhase_Aborted {
+		return
+	}
 
 	// Wait for all remaining children to roll up.  (This is a no-op if we're shutting down gracefully from a lack of tasks.)
 	// Or, also still be ready to bug out hard and fast if quitAggressively is called.
-	panic("todo")
+	// Keep a different error value here because it's not dominant.
+	var err2 error
+	for phase == SupervisorPhase_WindingDown {
+		select {
+		// TODO case for quitAggressively
+		case child := <-s.childCompletion:
+			phase, err2 = s._winddown_recvChild(child)
+		}
+	}
+	if err == nil {
+		err = err2
+	}
+	return
 }
 
-func (s *supervisor) _run_start() bool {
+func (s *supervisor) _run_start() SupervisorPhase {
 	// Do the phase transition and the launch of tasks submitted earlier under one contiguous mutex hold,
 	//  because we're changing the rule for whether knownTasks contents are expected to be launched.
 	s.mu.Lock()
@@ -361,13 +376,16 @@ func (s *supervisor) _run_start() bool {
 	}
 
 	// Corner case: if there were actually no tasks, and returnOnEmpty==true... we kinda never really need to do anything again.
-	if len(s.knownTasks) == 0 && s.returnOnEmpty {
+	if s.returnOnEmpty && len(s.knownTasks) == 0 {
 		atomic.StoreUint32(&s.phase, SupervisorPhase_Halted)
-		return false
+		return SupervisorPhase_Halted
 	}
-	return true
+	return SupervisorPhase_Running
 }
 
+// Handle the child's exit.  Remove it from tracking;
+// decide how to handle the error, if there is one;
+// and if we change phase, both store that and return it.
 func (s *supervisor) _run_recvChild(child *supervisedTask) (SupervisorPhase, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -375,16 +393,73 @@ func (s *supervisor) _run_recvChild(child *supervisedTask) (SupervisorPhase, err
 	// Remove it from the set of things we continue to need to track.
 	delete(s.knownTasks, child.name)
 
+	// If error is nil, we might quietly continue, or be done.
+	if child.err == nil {
+		if s.returnOnEmpty && len(s.knownTasks) == 0 {
+			atomic.StoreUint32(&s.phase, SupervisorPhase_Halted)
+			return SupervisorPhase_Halted, nil
+		}
+		return SupervisorPhase_Running, nil
+	}
+
+	// If error was non-nil, use the reactor callback to decide what happens next.
 	switch s.errReactor(child.err) {
 	case SupervisionReaction_Error:
+		if len(s.knownTasks) == 0 {
+			atomic.StoreUint32(&s.phase, SupervisorPhase_Halted)
+			return SupervisorPhase_Halted, child.err // TODO probably wrap
+		}
+		atomic.StoreUint32(&s.phase, SupervisorPhase_WindingDown)
 		return SupervisorPhase_WindingDown, child.err // TODO probably wrap
 	case SupervisionReaction_Ignore:
-		if len(s.knownTasks) == 0 {
+		if s.returnOnEmpty && len(s.knownTasks) == 0 {
+			atomic.StoreUint32(&s.phase, SupervisorPhase_WindingDown)
 			return SupervisorPhase_WindingDown, nil
 		}
 		return SupervisorPhase_Running, nil
 	case SupervisionReaction_AbortRapidly:
-		return SupervisorPhase_Aborting, child.err // TODO probably wrap
+		atomic.StoreUint32(&s.phase, SupervisorPhase_Aborted)
+		return SupervisorPhase_Aborted, child.err // TODO probably wrap
+	default:
+		panic("invalid SupervisionReaction enum returned by error reactor func")
+	}
+}
+
+// Very similar to _run_recvChild, but slightly different constants,
+// and we gave it a different name in for stack trace legibility purposes.
+func (s *supervisor) _winddown_recvChild(child *supervisedTask) (SupervisorPhase, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Remove it from the set of things we continue to need to track.
+	delete(s.knownTasks, child.name)
+
+	// If error is nil, we might quietly continue, or be done.
+	if child.err == nil {
+		if len(s.knownTasks) == 0 {
+			atomic.StoreUint32(&s.phase, SupervisorPhase_Halted)
+			return SupervisorPhase_Halted, nil
+		}
+		return SupervisorPhase_WindingDown, nil
+	}
+
+	// If error was non-nil, use the reactor callback to decide what happens next.
+	switch s.errReactor(child.err) {
+	case SupervisionReaction_Error:
+		if len(s.knownTasks) == 0 {
+			atomic.StoreUint32(&s.phase, SupervisorPhase_Halted)
+			return SupervisorPhase_Halted, child.err // TODO probably wrap
+		}
+		return SupervisorPhase_WindingDown, child.err // TODO probably wrap
+	case SupervisionReaction_Ignore:
+		if len(s.knownTasks) == 0 {
+			atomic.StoreUint32(&s.phase, SupervisorPhase_Halted)
+			return SupervisorPhase_Halted, nil
+		}
+		return SupervisorPhase_WindingDown, nil
+	case SupervisionReaction_AbortRapidly:
+		atomic.StoreUint32(&s.phase, SupervisorPhase_Aborted)
+		return SupervisorPhase_Aborted, child.err // TODO probably wrap
 	default:
 		panic("invalid SupervisionReaction enum returned by error reactor func")
 	}
@@ -400,9 +475,12 @@ func (s *supervisor) QuitAggressively() {
 
 func (s *supervisor) SetReturnOnEmpty(b bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.phase > SupervisorPhase_Running {
+		panic("nonsensical to change winddown triggers on a supervisor that's already past running")
+	}
 	s.returnOnEmpty = b
 	// TODO signal a core loop tick if this was a transition to true.
-	s.mu.Unlock()
 }
 
 func (s *supervisor) SetNameSelectionStrategy(nss func(string, string, int) string) {
@@ -459,8 +537,9 @@ func (t *supervisedTask) Run() error {
 	// TaskPhase_Cancelling is somewhat ellusive; go-sup helpers (like the channel guards) can set it, but if it's the user's code that picks it up, well.
 	// And we give notification a phase here again just for labelling purposes.  It "should" be instant.  But... just in case: let's have it be visible in the stack trace.
 	t._phase_awaitSupervision()
+	defer t._phase_notify()
+	defer t._panicCollector()
 	t._phase_run()
-	t._phase_notify()
 	return t.err
 }
 
@@ -491,8 +570,18 @@ func (t *supervisedTask) _phase_run() {
 	t.err = t.task.Run(t.ctx)
 }
 
+func (t *supervisedTask) _panicCollector() {
+	if err := recover(); err != nil {
+		err2, ok := err.(error)
+		if !ok {
+			err2 = fmt.Errorf("non-error value panicked: %s", err)
+		}
+		t.err = fmt.Errorf("panic collected: %w", err2) // FIXME replace this with more typed and meaningful errors.  the error handler should be able to see it's a recovered panic.
+	}
+}
+
 func (t *supervisedTask) _phase_notify() {
-	t.parent.childCompletion <- t
+	t.parent.childCompletion <- t // FIXME this needs to not happen if the parent is aborting; nobody's listening and we shouldn't block.
 	atomic.StoreUint32(&t.phase, TaskPhase_Done)
 	t.resolveFn(t)
 }
