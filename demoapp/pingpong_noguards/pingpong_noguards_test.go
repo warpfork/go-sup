@@ -20,6 +20,12 @@ func TestPingpong(t *testing.T) {
 			Ponger: true,
 		},
 	}
+	pingChan := make(chan Msg)
+	pongChan := make(chan Msg)
+	pinger.wiring.Outbox = pingChan
+	pinger.wiring.Inbox = pongChan
+	ponger.wiring.Outbox = pongChan
+	ponger.wiring.Inbox = pingChan
 
 	rootCtx := context.Background()
 	svr := sup.NewSupervisor(rootCtx)
@@ -47,6 +53,20 @@ type Config struct {
 
 type Msg struct {
 	Increment int
+}
+
+func (a *Actor) FirstStep(ctx sup.Context) error {
+	// If I'm a pinger: start get the ball rolling with a first message.
+	if !a.config.Ponger {
+		// Must be done in another select, because it must also abort if we receive the doneness signal.
+		select {
+		case a.wiring.Outbox <- Msg{}:
+			return nil // succesfully sent.
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 func (a *Actor) RunStep(ctx sup.Context) error {

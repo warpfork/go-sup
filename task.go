@@ -27,6 +27,10 @@ type SteppedTask interface {
 	RunStep(Context) error
 }
 
+type hasFirstStep interface {
+	FirstStep(Context) error
+}
+
 // FUTURE: We may add some features like `NewActor` (name tbd) that takes your runnable and wraps it in RunOnce sanity checkers.
 // Some runnables are written to be reusable; others are not; and we can't really usefully make those differentiable that in the API.
 // The next best thing we can do is offer a standard way to declare that, and deploy cost-effective runtime sanity checks to ensure incorrect usage can't go unnoticed.
@@ -66,14 +70,20 @@ type steppedTask struct {
 }
 
 func (t steppedTask) Run(ctx Context) error {
+	if t2, ok := t.t.(hasFirstStep); ok {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := t2.FirstStep(ctx); err != nil {
+			return err
+		}
+	}
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			if err := t.t.RunStep(ctx); err != nil {
-				return err
-			}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := t.t.RunStep(ctx); err != nil {
+			return err
 		}
 	}
 }

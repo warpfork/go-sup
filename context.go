@@ -2,41 +2,53 @@ package sup
 
 import "context"
 
+// Context is an alias permitting you to refer to sup.Context if you so desire.
 type Context = context.Context
 
-type (
-	ctxKey_supervisor = struct{}
-	ctxKey_task       = struct{}
-)
+// ctxKey is a magic type used as a unique key for ctx.Value attachments.
+//
+// We have exactly one such key and store all further information in a struct underneath it.
+// This approach is for sympathy to the internals of the context value attachment system --
+// it performs an allocation and forms roughly a sort of long linked list for each
+// additional attachment, so we reduce overhead by putting all value attachments
+// we know about into a single attachment.
+type ctxKey = struct{}
+
+func ReadContext(ctx Context) CtxAttachments {
+	v := ctx.Value(ctxKey{})
+	if v == nil {
+		return CtxAttachments{
+			TaskNameShort: "#noTask#",
+			TaskNameFull:  "#noTask#",
+		}
+	}
+	return v.(CtxAttachments)
+}
+
+type CtxAttachments struct {
+	Supervisor    Supervisor
+	Task          SupervisedTask
+	TaskNameShort string
+	TaskNameFull  string
+}
 
 // ContextSupervisor returns a pointer to the Supervisor
-// that's the nearest parent in this context's tree.
+// that's the nearest parent in this context's tree,
+// or nil if there is no supervisor.
 func ContextSupervisor(ctx Context) Supervisor {
-	v := ctx.Value(ctxKey_supervisor{})
-	if v == nil {
-		return nil
-	}
-	return v.(Supervisor)
+	return ReadContext(ctx).Supervisor
 }
 
 // ContextTask returns a pointer to the SupervisedTask
 // that's the nearest parent in this context's tree.
 func ContextTask(ctx Context) SupervisedTask {
-	v := ctx.Value(ctxKey_task{})
-	if v == nil {
-		return nil
-	}
-	return v.(SupervisedTask)
+	return ReadContext(ctx).Task
 }
 
 // ContextName is a shortcut for `ContextTask(ctx).Name()`,
 // or returns a placeholder string if there is no Task in this context.
 func ContextName(ctx Context) string {
-	task := ContextTask(ctx)
-	if task == nil {
-		return "#noTask#"
-	}
-	return task.Name()
+	return ReadContext(ctx).TaskNameFull
 }
 
 // Considered introducing a second quit/cancel channel that would mean "quit harder"

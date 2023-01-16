@@ -1,6 +1,7 @@
 package sup
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 )
@@ -183,15 +184,18 @@ type SupervisionWarning struct {
 }
 
 func NewSupervisor(ctx Context) Supervisor {
+	ctx2, cancelFn := context.WithCancel(ctx)
 	return &supervisor{
-		ctx:                   ctx,
+		ctxSelf:               ctx,
+		ctxChildren:           ctx2,
+		cancelChildren:        cancelFn,
 		parent:                ContextSupervisor(ctx),
 		nameSelectionStrategy: NameSelectionStrategy.Default,
 		returnOnEmpty:         true,
+		errReactor:            func(error) SupervisionReaction { return SupervisionReaction_Error },
 
-		phase:         SupervisorPhase_NotStarted,
-		knownTasks:    make(map[string]*supervisedTask),
-		reservedNames: make(map[string]struct{}),
+		phase:      SupervisorPhase_NotStarted,
+		knownTasks: make(map[string]*supervisedTask),
 
 		childCompletion: make(chan *supervisedTask, 1),
 	}
@@ -201,18 +205,27 @@ func NewSupervisor(ctx Context) Supervisor {
 // We used an interface for the public API as a "just in case",
 // but for now, any variations we're aware of are doable with configuration rather than whole polymorphism.
 type supervisor struct {
-	mu sync.Mutex // way too much going on here to keep it straight any other way.
+	// One mutex guards most operations relating to knownTasks.
+	// The Submit function grabs it when used, and the Run function grabs it cyclically while the supervisor is running.
+	// Because Submit can be called before Run, we need a mutex, rather than a submission channel handled actor-style, which might've otherwise been preferable.
+	// Since we've got it, then, we alsouse it to guard changes to and reads from all the other config fields in a supervisor.
+	// It's not typical to change most of the config fields during the run, but we face no significant additional cost by supporting it, so we might as well.
+	mu sync.Mutex
 
 	// config:
-	ctx                   Context
+	name                  string
+	nameFQ                string
+	ctxSelf               Context
+	ctxChildren           Context // all child contexts fork from this (thus share cancellation)
+	cancelChildren        func()
 	parent                Supervisor
 	nameSelectionStrategy func(requested, attempted string, attempts int) (proposed string)
 	returnOnEmpty         bool
+	errReactor            func(error) SupervisionReaction
 
 	// state:
-	phase         SupervisorPhase
-	knownTasks    map[string]*supervisedTask
-	reservedNames map[string]struct{}
+	phase      SupervisorPhase
+	knownTasks map[string]*supervisedTask
 
 	// wiring:
 	childCompletion chan *supervisedTask // children send themselves here when done.
@@ -235,7 +248,45 @@ const (
 )
 
 func (s *supervisor) Submit(name string, t Task) SupervisedTask {
-	panic("todo")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// TODO if we're already WindingDown, Aborting, or Halted: return a dummy task.
+	//  ...probably do still have to name it?  Or can we give it a single reused dummy name?  Tbd.
+	// Perhaps also have configurable rejection strategy.  Some might prefer a panic if they submit to a closed supervisor.
+
+	// Pick a locally unique name.
+	name = s._submit_selectName(name)
+
+	// Create the supervisedTask struct, and record it.
+	st := &supervisedTask{
+		task:         t,
+		name:         name,
+		nameFQ:       s.nameFQ + "." + name,
+		parent:       s,
+		phase:        TaskPhase_Initial,
+		clearToStart: make(chan struct{}), // TODO I think we can avoid this alloc in the case the supervisor is already running.
+	}
+	st.promise, st.resolveFn = NewPromise[SupervisedTask]()
+	s.knownTasks[name] = st
+
+	// Create the Context for this soon-to-be child.
+	// Each supervised task gets a new context value, with attachments describing it,
+	// and decended from the context this superviser users to cancel all children.
+	st.ctx = context.WithValue(s.ctxChildren, ctxKey{}, CtxAttachments{
+		Supervisor:    s,
+		Task:          st,
+		TaskNameShort: st.name,
+		TaskNameFull:  st.nameFQ,
+	})
+
+	// If this supervisor is already running: we can let it launch right away.
+	switch s.phase {
+	case SupervisorPhase_Running:
+		close(st.clearToStart)
+		// No atomics needed here; no one else can see this memory yet.
+		st.phase = TaskPhase_SupervisedButUnpowered
+	}
 
 	// TODO wrap it in panic gathering?
 	//  I guess by default, yes, and opting out of that is yet another configurable property of the supervisor.
@@ -243,17 +294,100 @@ func (s *supervisor) Submit(name string, t Task) SupervisedTask {
 	// TODO also peek for if the task is another supervisor.  save a tree of these.
 	//  It's not strictly necessary for the supervision/waiting/error-gathering jobs,
 	//  but it enables some neat stuff like being able to ask for a report about the whole tree of tasks and their statuses.
+
+	return st
+}
+
+func (s *supervisor) _submit_selectName(requested string) string {
+	nameAttempts := 0
+	actualName := requested
+	for {
+		actualName = s.nameSelectionStrategy(requested, actualName, nameAttempts)
+		if _, exists := s.knownTasks[actualName]; !exists {
+			return actualName
+		}
+		nameAttempts++
+		if nameAttempts > 100 {
+			panic("your name selection strategy is broken") // TODO do some other fallback.  Maybe just add more numbers than the nss asked for.
+		}
+	}
 }
 
 func (s *supervisor) Run(Context) error {
+	if more := s._run_start(); !more {
+		return nil
+	}
+
+	// Loop, servicing the childCompletion channel, until either:
+	//  - knownTasks is empty, and returnOnEmpty is true at the same time;
+	//  - one of those child completions carries an error that the error reactor didn't swallow;
+	//  - or quitAggressively is called.
+	select {
+	// TODO case for quitAggressively
+	// TODO case for transitioned to returnOnEmpty==true
+	case child := <-s.childCompletion:
+		s._run_recvChild(child)
+	}
+
+	// TODO This is not easier to model as linear flow.  Use a state machine.
+
+	// Fan out any cancellations.  (This is a no-op if we're shutting down gracefully from a lack of tasks.)
+	panic("todo")
+
+	// If we're in quitAggressively/abort mode: that's it.  Get outta here.
+	panic("todo")
+
+	// Wait for all remaining children to roll up.  (This is a no-op if we're shutting down gracefully from a lack of tasks.)
+	// Or, also still be ready to bug out hard and fast if quitAggressively is called.
+	panic("todo")
+}
+
+func (s *supervisor) _run_start() bool {
+	// Do the phase transition and the launch of tasks submitted earlier under one contiguous mutex hold,
+	//  because we're changing the rule for whether knownTasks contents are expected to be launched.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Enforce single-run.
+	// (Atomics on the phase are somewhat overkill, since we hold the lock anyway, but keeps any peeking loads well-defined.)
 	ok := atomic.CompareAndSwapUint32(&s.phase, SupervisorPhase_NotStarted, SupervisorPhase_Running)
 	if !ok {
 		panic("supervisor can only be Run() once!")
 	}
 
 	// Finish setting up and unblock all SupervisedTask that were registered before we launched.
-	panic("todo")
+	for _, child := range s.knownTasks {
+		close(child.clearToStart)
+	}
+
+	// Corner case: if there were actually no tasks, and returnOnEmpty==true... we kinda never really need to do anything again.
+	if len(s.knownTasks) == 0 && s.returnOnEmpty {
+		atomic.StoreUint32(&s.phase, SupervisorPhase_Halted)
+		return false
+	}
+	return true
+}
+
+func (s *supervisor) _run_recvChild(child *supervisedTask) (SupervisorPhase, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Remove it from the set of things we continue to need to track.
+	delete(s.knownTasks, child.name)
+
+	switch s.errReactor(child.err) {
+	case SupervisionReaction_Error:
+		return SupervisorPhase_WindingDown, child.err // TODO probably wrap
+	case SupervisionReaction_Ignore:
+		if len(s.knownTasks) == 0 {
+			return SupervisorPhase_WindingDown, nil
+		}
+		return SupervisorPhase_Running, nil
+	case SupervisionReaction_AbortRapidly:
+		return SupervisorPhase_Aborting, child.err // TODO probably wrap
+	default:
+		panic("invalid SupervisionReaction enum returned by error reactor func")
+	}
 }
 
 func (s *supervisor) Parent() Supervisor {
@@ -267,7 +401,7 @@ func (s *supervisor) QuitAggressively() {
 func (s *supervisor) SetReturnOnEmpty(b bool) {
 	s.mu.Lock()
 	s.returnOnEmpty = b
-	// todo signal a core loop tick if this was a transition to true.
+	// TODO signal a core loop tick if this was a transition to true.
 	s.mu.Unlock()
 }
 
@@ -287,11 +421,35 @@ func (s *supervisor) SetWarningHandler(func(SupervisionWarning) error) {
 
 type supervisedTask struct {
 	task         Task
-	parent       supervisor // set by parent when during Submit
-	ctx          Context    // set by parent when during Submit
+	name         string      // set by parent during Submit
+	nameFQ       string      // set by parent during Submit
+	parent       *supervisor // set by parent during Submit
+	ctx          Context     // set by parent during Submit
 	phase        TaskPhase
-	clearToStart <-chan struct{} // closed to signal that the parent supervisor has started and is therefore ready to receive any errors.
-	err          error           // stored at end of Run; parent can pluck it back out.
+	clearToStart chan struct{} // closed by the parent supervisor when it has started, signalling it's ready to receive any errors and that this task can thus start.
+	err          error         // stored at end of Run; parent can pluck it back out.
+	promise      Promise[SupervisedTask]
+	resolveFn    func(SupervisedTask)
+}
+
+func (t *supervisedTask) Name() string {
+	return t.nameFQ
+}
+
+func (t *supervisedTask) Task() Task {
+	return t.task
+}
+
+func (t *supervisedTask) Parent() Supervisor {
+	return t.parent
+}
+
+func (t *supervisedTask) Phase() TaskPhase {
+	return atomic.LoadUint32(&t.phase)
+}
+
+func (t *supervisedTask) Promise() Promise[SupervisedTask] {
+	return t.promise
 }
 
 func (t *supervisedTask) Run() error {
@@ -336,5 +494,5 @@ func (t *supervisedTask) _phase_run() {
 func (t *supervisedTask) _phase_notify() {
 	t.parent.childCompletion <- t
 	atomic.StoreUint32(&t.phase, TaskPhase_Done)
-	// TODO there should be a 'Promise.resolve' right about here, too.
+	t.resolveFn(t)
 }
