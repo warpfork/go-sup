@@ -12,7 +12,7 @@ import (
 func Test(t *testing.T) {
 	rootCtx := context.Background()
 
-	svr := sup.NewSupervisor(rootCtx)
+	svr := sup.NewRootSupervisor(rootCtx)
 	// First, just a regular task submission.
 	go svr.Submit("bapper-0-5", &Bapper{0, 5}).Run()
 	// Now, we'll create a sub-tree of supervision... starting with just a regular task func,

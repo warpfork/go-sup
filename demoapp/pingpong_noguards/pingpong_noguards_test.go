@@ -30,7 +30,7 @@ func TestPingpong(t *testing.T) {
 
 	rootCtx := context.Background()
 	deadlinedCtx, _ := context.WithDeadline(rootCtx, time.Now().Add(2*time.Second))
-	svr := sup.NewSupervisor(deadlinedCtx)
+	svr := sup.NewRootSupervisor(deadlinedCtx)
 	go svr.Submit("pinger", sup.TaskOfSteppedTask(pinger)).Run()
 	go svr.Submit("ponger", sup.TaskOfSteppedTask(ponger)).Run()
 	err := svr.Run(deadlinedCtx)

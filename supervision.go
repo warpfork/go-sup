@@ -184,6 +184,38 @@ type SupervisionWarning struct {
 	// TBD.
 }
 
+// NewRootSupervisor creates a new Supervisor with no parent
+// and the name "root".
+//
+// Use this the first time you create a supervisor in your program.
+//
+// (Currently, there is no enforcement that you do this only one time,
+// but task names may become confusing and collide if this is used more than once.)
+func NewRootSupervisor(ctx Context) Supervisor {
+	ctx2, cancelFn := context.WithCancel(ctx)
+	return &supervisor{
+		name:                  "root", // TODO make this a parameter, and use a package-global map to force uniqueness.
+		nameFQ:                "root",
+		ctxSelf:               ctx,
+		ctxChildren:           ctx2,
+		cancelChildren:        cancelFn,
+		parent:                nil,
+		nameSelectionStrategy: NameSelectionStrategy.Default,
+		returnOnEmpty:         true,
+		errReactor:            func(error) SupervisionReaction { return SupervisionReaction_Error },
+
+		phase:      SupervisorPhase_NotStarted,
+		knownTasks: make(map[string]*supervisedTask),
+
+		childCompletion: make(chan *supervisedTask, 1),
+	}
+}
+
+// NewSupervisor creates a new, not-yet-launched Supervisor,
+// which inherents its name from the current context's task
+// (e.g. `ContextName(ctx)`), and is connected to the parent Supervisor of that task.
+//
+// Use this in preference to NewRootSupervisor unless it's the first one in the program.
 func NewSupervisor(ctx Context) Supervisor {
 	ctxInfo := ReadContext(ctx)
 	ctx2, cancelFn := context.WithCancel(ctx)

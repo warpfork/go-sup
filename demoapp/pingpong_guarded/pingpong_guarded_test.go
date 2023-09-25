@@ -28,7 +28,7 @@ func TestPingpong(t *testing.T) {
 	ponger.wiring.Inbox = sup.ReceiverChannel[Msg]{pingChan}
 
 	rootCtx := context.Background()
-	svr := sup.NewSupervisor(rootCtx)
+	svr := sup.NewRootSupervisor(rootCtx)
 	go svr.Submit("pinger", sup.TaskOfSteppedTask(pinger)).Run()
 	go svr.Submit("ponger", sup.TaskOfSteppedTask(ponger)).Run()
 	err := svr.Run(rootCtx)
