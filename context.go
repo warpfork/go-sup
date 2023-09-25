@@ -18,8 +18,8 @@ func ReadContext(ctx Context) CtxAttachments {
 	v := ctx.Value(ctxKey{})
 	if v == nil {
 		return CtxAttachments{
-			TaskNameShort: "#noTask#",
-			TaskNameFull:  "#noTask#",
+			TaskNameShort: "[unmanaged]",
+			TaskNameFull:  "[unmanaged]",
 		}
 	}
 	return v.(CtxAttachments)

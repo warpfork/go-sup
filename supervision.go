@@ -185,12 +185,15 @@ type SupervisionWarning struct {
 }
 
 func NewSupervisor(ctx Context) Supervisor {
+	ctxInfo := ReadContext(ctx)
 	ctx2, cancelFn := context.WithCancel(ctx)
 	return &supervisor{
+		name:                  ctxInfo.TaskNameShort,
+		nameFQ:                ctxInfo.TaskNameFull,
 		ctxSelf:               ctx,
 		ctxChildren:           ctx2,
 		cancelChildren:        cancelFn,
-		parent:                ContextSupervisor(ctx),
+		parent:                ctxInfo.Supervisor,
 		nameSelectionStrategy: NameSelectionStrategy.Default,
 		returnOnEmpty:         true,
 		errReactor:            func(error) SupervisionReaction { return SupervisionReaction_Error },

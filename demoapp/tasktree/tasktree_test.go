@@ -20,8 +20,8 @@ func Test(t *testing.T) {
 	go svr.Submit("subtree", sup.TaskOfFunc(func(ctx context.Context) error {
 		fmt.Printf("subtree task launched, named %s\n", sup.ContextName(ctx))
 		subtreeSvr := sup.NewSupervisor(ctx)
-		go svr.Submit("bapper-5-10", &Bapper{5, 5}).Run()
-		go svr.Submit("bapper-10-15", &Bapper{10, 5}).Run()
+		go subtreeSvr.Submit("bapper-5-10", &Bapper{5, 5}).Run()
+		go subtreeSvr.Submit("bapper-10-15", &Bapper{10, 5}).Run()
 		err := subtreeSvr.Run(ctx)
 		fmt.Printf("subtree supervisor returned\n")
 		return err
@@ -49,7 +49,7 @@ func (b *Bapper) Run(ctx context.Context) error {
 		// Idle a while (as a simulated placeholder for some other hard work),
 		// or always be ready to accept that we've been cancelled.
 		select {
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(1000 * time.Millisecond):
 			continue
 		case <-ctx.Done():
 			return ctx.Err()
