@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/warpfork/go-sup"
 )
@@ -28,13 +29,15 @@ func TestPingpong(t *testing.T) {
 	ponger.wiring.Inbox = pingChan
 
 	rootCtx := context.Background()
-	svr := sup.NewSupervisor(rootCtx)
+	deadlinedCtx, _ := context.WithDeadline(rootCtx, time.Now().Add(2*time.Second))
+	svr := sup.NewSupervisor(deadlinedCtx)
 	go svr.Submit("pinger", sup.TaskOfSteppedTask(pinger)).Run()
 	go svr.Submit("ponger", sup.TaskOfSteppedTask(ponger)).Run()
-	err := svr.Run(rootCtx)
-	if err != nil {
-		panic(err)
-	}
+	err := svr.Run(deadlinedCtx)
+	fmt.Printf("final error returned from root supervisor's run: %v\n", err)
+	// ^ This'll say "context deadline exceeded", because that signal coming down from the deadlinedCtx is what halts this demo.
+	time.Sleep(1 * time.Second)
+	// What's really important is that you won't see any more messages from the pinger and ponger tasks after this :)
 }
 
 type Actor struct {
