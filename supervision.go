@@ -349,7 +349,19 @@ func (s *supervisor) _submit_selectName(requested string) string {
 	}
 }
 
-func (s *supervisor) Run(Context) (err error) {
+// Run matches the standard `Task` interface.
+// The running of supervision logic is just another task, after all!
+//
+// Note that the Context argument must exactly match the one given
+// to NewSupervisor at construction time.
+// (We need a Context at NewSupervisor time because we use it to derive task names,
+// and we do those promptly during submission... but we also need a Context object
+// here, purely to satisfy the Task interface.  This is unfortunate.)
+func (s *supervisor) Run(ctx Context) (err error) {
+	if s.ctxSelf != ctx {
+		panic("supervisor.Run must be given the same Context used to construct it!")
+	}
+
 	phase := s._run_start()
 
 	// Loop, servicing the childCompletion channel, until either:
